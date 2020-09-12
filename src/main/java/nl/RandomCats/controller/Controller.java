@@ -13,6 +13,9 @@ import java.util.List;
 import java.util.ListIterator;
 import java.util.Optional;
 import java.util.Random;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import javax.swing.JOptionPane;
 import javax.swing.SwingUtilities;
@@ -33,6 +36,7 @@ public class Controller implements PropertyChangeListener {
 	private List<Cat> oldCats;
 	private Datasource<Cat> datasource;
 	private ListIterator<Cat> iterator;
+	private ExecutorService executorService;
 
 	public Controller() {
 		try {
@@ -42,6 +46,7 @@ public class Controller implements PropertyChangeListener {
 		}
 		this.datasource = CatDatasource.getInstance();	
 		process((e) -> datasource.open(), null);
+		executorService = Executors.newFixedThreadPool(3);
 		setNewCat();
 		getOldCats();
 		addActionListeners();
@@ -99,6 +104,14 @@ public class Controller implements PropertyChangeListener {
 	}
 
 	private void saveCat() {
+		if(oldCats == null) {
+			return;
+		}
+		
+		if(iterator == null) {
+			iterator = oldCats.listIterator();
+		}
+		
 		Cat currentCat = view.getCurrentCat();
 		boolean alreadySaved = oldCats.stream().anyMatch(oldCat -> oldCat.equals(currentCat));
 
@@ -112,6 +125,7 @@ public class Controller implements PropertyChangeListener {
 					ImageSavingTask task = new ImageSavingTask(view, currentCat);
 					task.execute();
 					iterator.add(currentCat);
+					iterator.previous();
 				});
 	}
 	
@@ -136,13 +150,9 @@ public class Controller implements PropertyChangeListener {
 	}
 
 	private void getOldCats() {
-		processOnThread((e) -> oldCats = datasource.findAll(), null);
+		executorService.submit(() -> process((e) -> oldCats = datasource.findAll(), null));
 	}
 	
-	private <R, T> void processOnThread(ThrowingFunction<R, T> function, T t) {
-		new Thread(() -> process(function, t)).start();
-	}
-
 	private <R, T> R process(ThrowingFunction<R, T> function, T t) {
 		try {
 			return function.apply(t);
@@ -176,7 +186,17 @@ public class Controller implements PropertyChangeListener {
 	}
 
 	private void close() {
+		executorService.shutdown();
+		try {
+		    if (!executorService.awaitTermination(800, TimeUnit.MILLISECONDS)) {
+		        executorService.shutdownNow();
+		    } 
+		} catch (InterruptedException e) {
+		    executorService.shutdownNow();
+		}
+		
 		process((e) -> datasource.close(), null);
+		
 		System.exit(0);
 	}
 
@@ -196,7 +216,7 @@ public class Controller implements PropertyChangeListener {
 			LOGGER.error(e);
 		}
 		
-		processOnThread((e) -> datasource.delete(e), view.getCurrentCat());
+		executorService.submit(() -> process((e) -> datasource.delete(e), view.getCurrentCat()));
 		iterator.remove();
 	}
 	
